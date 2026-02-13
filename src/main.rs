@@ -28,6 +28,7 @@ struct MoshyaApp {
     grid_cols: u32,
     grid_rows: u32,
     grid_color: GridColor,
+    image_size: Option<(u32, u32)>,
 }
 #[derive(PartialEq)]
 enum GridColor {
@@ -59,6 +60,7 @@ impl Default for MoshyaApp {
             grid_cols: 4,
             grid_rows: 4,
             grid_color: GridColor::Red,
+            image_size: None,
         }
     }
 }
@@ -68,6 +70,11 @@ impl MoshyaApp {
             .add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp"])
             .pick_file()
         {
+            if let Ok((width, height)) = image::image_dimensions(&path) {
+                self.image_size = Some((width, height));
+            } else {
+                self.image_size = None;
+            }
             self.image_path = Some(path);
         }
     }
@@ -126,7 +133,11 @@ impl eframe::App for MoshyaApp {
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut self.grid_color, GridColor::Red, "Red");
                                 ui.selectable_value(&mut self.grid_color, GridColor::Cyan, "Cyan");
-                                ui.selectable_value(&mut self.grid_color, GridColor::Green, "Green");
+                                ui.selectable_value(
+                                    &mut self.grid_color,
+                                    GridColor::Green,
+                                    "Green",
+                                );
                                 ui.selectable_value(
                                     &mut self.grid_color,
                                     GridColor::White,
@@ -138,6 +149,10 @@ impl eframe::App for MoshyaApp {
                                     "Black",
                                 );
                             });
+                    }
+                    ui.separator();
+                    if let Some((width, height)) = self.image_size {
+                        ui.label(format!("{}x{}", width, height));
                     }
                 });
                 ui.separator();
