@@ -72,6 +72,8 @@ impl MoshyaApp {
         {
             if let Ok((width, height)) = image::image_dimensions(&path) {
                 self.image_size = Some((width, height));
+            } else {
+                self.image_size = None;
             }
             self.image_path = Some(path);
         }
