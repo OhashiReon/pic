@@ -126,7 +126,11 @@ impl eframe::App for MoshyaApp {
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut self.grid_color, GridColor::Red, "Red");
                                 ui.selectable_value(&mut self.grid_color, GridColor::Cyan, "Cyan");
-                                ui.selectable_value(&mut self.grid_color, GridColor::Green, "Green");
+                                ui.selectable_value(
+                                    &mut self.grid_color,
+                                    GridColor::Green,
+                                    "Green",
+                                );
                                 ui.selectable_value(
                                     &mut self.grid_color,
                                     GridColor::White,
@@ -138,6 +142,12 @@ impl eframe::App for MoshyaApp {
                                     "Black",
                                 );
                             });
+                    }
+                    ui.separator();
+                    if let Some(path) = &self.image_path {
+                        if let Ok((width, height)) = image::image_dimensions(path) {
+                            ui.label(format!("{} × {}", width, height));
+                        }
                     }
                 });
                 ui.separator();
