@@ -14,10 +14,58 @@ fn main() -> eframe::Result<()> {
         "Moshya Viewer",
         options,
         Box::new(|cc| {
+            cc.egui_ctx.set_style(configure_pro_style());
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Ok(Box::new(MoshyaApp::default()))
         }),
     )
+}
+
+fn configure_pro_style() -> egui::Style {
+    let mut style = egui::Style::default();
+
+    // Structured & Dense Spacing
+    style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+    style.spacing.button_padding = egui::vec2(6.0, 2.0);
+    style.spacing.window_margin = egui::Margin::same(8.0);
+
+    // Sharp Edges (Pro Tool style)
+    let rounding = egui::Rounding::same(2.0);
+    style.visuals.window_rounding = rounding;
+    style.visuals.menu_rounding = rounding;
+    style.visuals.widgets.noninteractive.rounding = rounding;
+    style.visuals.widgets.inactive.rounding = rounding;
+    style.visuals.widgets.hovered.rounding = rounding;
+    style.visuals.widgets.active.rounding = rounding;
+    style.visuals.widgets.open.rounding = rounding;
+
+    // Solid & Dark Color Palette (Nordic Frost / Nord Theme)
+    let bg_color = egui::Color32::from_rgb(46, 52, 64);      // Nord 0
+    let panel_color = egui::Color32::from_rgb(59, 66, 82);   // Nord 1
+    let widget_color = egui::Color32::from_rgb(67, 76, 94);  // Nord 2
+    let hover_color = egui::Color32::from_rgb(76, 86, 106);  // Nord 3
+    let accent_color = egui::Color32::from_rgb(136, 192, 208); // Nord 8 (Frost)
+    let text_color = egui::Color32::from_rgb(216, 222, 233); // Nord 4
+
+
+    style.visuals.dark_mode = true;
+    style.visuals.override_text_color = Some(text_color);
+    style.visuals.window_fill = bg_color;
+    style.visuals.panel_fill = panel_color;
+
+    // Borderless widgets for a cleaner look
+    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+    style.visuals.widgets.active.bg_stroke = egui::Stroke::NONE;
+
+    style.visuals.widgets.inactive.bg_fill = widget_color;
+    style.visuals.widgets.hovered.bg_fill = hover_color;
+    style.visuals.widgets.active.bg_fill = accent_color;
+
+    style.visuals.selection.bg_fill = accent_color;
+
+    style
 }
 
 enum AppImage {
@@ -40,6 +88,7 @@ struct MoshyaApp {
     image_size: Option<(u32, u32)>,
     web_url: String,
     fit_to_window: bool,
+    show_settings_panel: bool,
 }
 
 #[derive(PartialEq)]
@@ -80,6 +129,7 @@ impl Default for MoshyaApp {
             image_size: None,
             web_url: String::new(),
             fit_to_window: true,
+            show_settings_panel: false,
         }
     }
 }
@@ -138,7 +188,186 @@ impl eframe::App for MoshyaApp {
             self.load_from_clipboard(ctx);
         }
 
-        let panel_frame = egui::Frame::default().fill(egui::Color32::from_rgba_premultiplied(
+        // Top Panel: Toolbar
+        egui::TopBottomPanel::top("top_toolbar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+
+                // File Operations
+                if ui.button("📂").on_hover_text("Open File").clicked() {
+                    self.open_file();
+                }
+                if ui.button("📋").on_hover_text("Paste (Ctrl+V)").clicked() {
+                    self.load_from_clipboard(ctx);
+                }
+
+                ui.separator();
+
+                // URL Input
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.web_url)
+                        .hint_text("Image URL...")
+                        .desired_width(150.0),
+                );
+                if ui.button("🌐").on_hover_text("Load URL").clicked() {
+                    if !self.web_url.is_empty() {
+                        self.image_size = None;
+                        self.current_image = Some(AppImage::Uri(self.web_url.clone()));
+                    }
+                }
+
+                ui.separator();
+
+                // View Controls
+                let fit_text = if self.fit_to_window {
+                    "Actual Size"
+                } else {
+                    "Fit Window"
+                };
+                if ui.button(fit_text).clicked() {
+                    self.fit_to_window = !self.fit_to_window;
+                }
+
+                let pin_text = if self.always_on_top { "Unpin" } else { "Pin" };
+                if ui.button(pin_text).clicked() {
+                    self.always_on_top = !self.always_on_top;
+                    let level = if self.always_on_top {
+                        egui::WindowLevel::AlwaysOnTop
+                    } else {
+                        egui::WindowLevel::Normal
+                    };
+                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+                }
+
+                // Right-aligned settings toggle
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.toggle_value(&mut self.show_settings_panel, "⚙ Settings");
+                });
+            });
+        });
+
+        // Bottom Panel: Status Bar
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.small(if let Some((w, h)) = self.image_size {
+                    format!("Resolution: {}x{}", w, h)
+                } else {
+                    "No image loaded".to_string()
+                });
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.small("Moshya Viewer v0.1.0");
+                });
+            });
+        });
+
+        // Right Panel: Settings Sidebar
+        if self.show_settings_panel {
+            egui::SidePanel::right("settings_sidebar")
+                .resizable(false)
+                .default_width(200.0)
+                .show(ctx, |ui| {
+                    ui.add_space(8.0);
+                    ui.heading("Settings");
+                    ui.separator();
+
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Display").strong());
+                    ui.horizontal(|ui| {
+                        ui.label("Opacity:");
+                        ui.add(egui::Slider::new(&mut self.opacity, 0.1..=1.0).show_value(false));
+                    });
+
+                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new("Grid").strong());
+                    ui.checkbox(&mut self.show_grid, "Enable Grid");
+
+                    if self.show_grid {
+                        ui.indent("grid_settings", |ui| {
+                            egui::Grid::new("grid_config")
+                                .num_columns(2)
+                                .spacing([10.0, 8.0])
+                                .show(ui, |ui| {
+                                    ui.label("X Columns:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.grid_cols).range(1..=100),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Y Rows:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.grid_rows).range(1..=100),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Color:");
+                                    egui::ComboBox::from_id_salt("grid_color")
+                                        .selected_text(match self.grid_color {
+                                            GridColor::Red => "Red",
+                                            GridColor::Cyan => "Cyan",
+                                            GridColor::Green => "Green",
+                                            GridColor::White => "White",
+                                            GridColor::Black => "Black",
+                                        })
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut self.grid_color,
+                                                GridColor::Red,
+                                                "Red",
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.grid_color,
+                                                GridColor::Cyan,
+                                                "Cyan",
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.grid_color,
+                                                GridColor::Green,
+                                                "Green",
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.grid_color,
+                                                GridColor::White,
+                                                "White",
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.grid_color,
+                                                GridColor::Black,
+                                                "Black",
+                                            );
+                                        });
+                                    ui.end_row();
+
+                                    ui.label("Subdivision:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.grid_subdivision)
+                                            .range(1..=10),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Thick Line:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.thick_line_width)
+                                            .range(0.1..=10.0)
+                                            .speed(0.1),
+                                    );
+                                    ui.end_row();
+
+                                    ui.label("Thin Line:");
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.thin_line_width)
+                                            .range(0.1..=10.0)
+                                            .speed(0.1),
+                                    );
+                                    ui.end_row();
+                                });
+                        });
+                    }
+                });
+        }
+
+        // Central Panel: Image Area
+        let panel_frame = egui::Frame::none().fill(egui::Color32::from_rgba_premultiplied(
             0,
             0,
             0,
@@ -148,121 +377,6 @@ impl eframe::App for MoshyaApp {
         egui::CentralPanel::default()
             .frame(panel_frame)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button("📂").on_hover_text("Open File").clicked() {
-                        self.open_file();
-                    }
-                    if ui
-                        .button("📋")
-                        .on_hover_text("Paste from Clipboard (Ctrl+V)")
-                        .clicked()
-                    {
-                        self.load_from_clipboard(ctx);
-                    }
-
-                    ui.separator();
-                    ui.add(egui::TextEdit::singleline(&mut self.web_url).hint_text("Image URL..."));
-                    if ui.button("🌐").on_hover_text("Load URL").clicked() {
-                        if !self.web_url.is_empty() {
-                            self.image_size = None;
-                            self.current_image = Some(AppImage::Uri(self.web_url.clone()));
-                        }
-                    }
-
-                    ui.separator();
-                    let fit_text = if self.fit_to_window {
-                        "Actual Size"
-                    } else {
-                        "Fit Window"
-                    };
-                    if ui
-                        .button(fit_text)
-                        .on_hover_text("Toggle Fit to Window / Actual Size")
-                        .clicked()
-                    {
-                        self.fit_to_window = !self.fit_to_window;
-                    }
-
-                    ui.separator();
-                    let pin_text = if self.always_on_top { "Unpin" } else { "Pin" };
-                    if ui.button(pin_text).clicked() {
-                        self.always_on_top = !self.always_on_top;
-                        let level = if self.always_on_top {
-                            egui::WindowLevel::AlwaysOnTop
-                        } else {
-                            egui::WindowLevel::Normal
-                        };
-                        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
-                    }
-
-                    ui.separator();
-                    ui.label("Op:");
-                    ui.add(egui::Slider::new(&mut self.opacity, 0.1..=1.0).show_value(false));
-
-                    ui.separator();
-                    let grid_btn_text = if self.show_grid {
-                        "Grid On"
-                    } else {
-                        "Grid Off"
-                    };
-                    if ui.button(grid_btn_text).clicked() {
-                        self.show_grid = !self.show_grid;
-                    }
-                    if self.show_grid {
-                        ui.label("X:");
-                        ui.add(egui::DragValue::new(&mut self.grid_cols).range(1..=100));
-                        ui.label("Y:");
-                        ui.add(egui::DragValue::new(&mut self.grid_rows).range(1..=100));
-                        egui::ComboBox::from_id_salt("grid_color")
-                            .selected_text(match self.grid_color {
-                                GridColor::Red => "Red",
-                                GridColor::Cyan => "Cyan",
-                                GridColor::Green => "Green",
-                                GridColor::White => "White",
-                                GridColor::Black => "Black",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.grid_color, GridColor::Red, "Red");
-                                ui.selectable_value(&mut self.grid_color, GridColor::Cyan, "Cyan");
-                                ui.selectable_value(
-                                    &mut self.grid_color,
-                                    GridColor::Green,
-                                    "Green",
-                                );
-                                ui.selectable_value(
-                                    &mut self.grid_color,
-                                    GridColor::White,
-                                    "White",
-                                );
-                                ui.selectable_value(
-                                    &mut self.grid_color,
-                                    GridColor::Black,
-                                    "Black",
-                                );
-                            });
-                        ui.label("Div:");
-                        ui.add(egui::DragValue::new(&mut self.grid_subdivision).range(1..=10));
-                        ui.label("Thick:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.thick_line_width)
-                                .range(0.1..=10.0)
-                                .speed(0.1),
-                        );
-                        ui.label("Thin:");
-                        ui.add(
-                            egui::DragValue::new(&mut self.thin_line_width)
-                                .range(0.1..=10.0)
-                                .speed(0.1),
-                        );
-                    }
-                    ui.separator();
-                    if let Some((width, height)) = self.image_size {
-                        ui.label(format!("{}x{}", width, height));
-                    }
-                });
-
-                ui.separator();
-
                 if let Some(app_img) = &self.current_image {
                     let available_size = ui.available_size();
                     let alpha = (255.0 * self.opacity) as u8;
@@ -324,11 +438,14 @@ impl eframe::App for MoshyaApp {
                     });
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label("Drop an image, paste, or enter a URL");
+                        ui.label(
+                            egui::RichText::new("Drop an image, paste, or enter a URL").weak(),
+                        );
                     });
                 }
             });
 
+        // Handle file drops
         if !ctx.input(|i| i.raw.dropped_files.is_empty()) {
             let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
             if let Some(file) = dropped_files.first() {
