@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use eframe::egui;
-
 use std::path::PathBuf;
+
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -19,8 +19,14 @@ fn main() -> eframe::Result<()> {
         }),
     )
 }
+
+enum AppImage {
+    Uri(String),
+    Texture(egui::TextureHandle),
+}
+
 struct MoshyaApp {
-    image_path: Option<PathBuf>,
+    current_image: Option<AppImage>,
     opacity: f32,
     rotation: f32,
     always_on_top: bool,
@@ -29,7 +35,10 @@ struct MoshyaApp {
     grid_rows: u32,
     grid_color: GridColor,
     image_size: Option<(u32, u32)>,
+    web_url: String,
+    fit_to_window: bool,
 }
+
 #[derive(PartialEq)]
 enum GridColor {
     Red,
@@ -38,6 +47,7 @@ enum GridColor {
     White,
     Black,
 }
+
 impl GridColor {
     fn to_color32(&self) -> egui::Color32 {
         match self {
@@ -49,10 +59,11 @@ impl GridColor {
         }
     }
 }
+
 impl Default for MoshyaApp {
     fn default() -> Self {
         Self {
-            image_path: None,
+            current_image: None,
             opacity: 1.0,
             rotation: 0.0,
             always_on_top: false,
@@ -61,39 +72,112 @@ impl Default for MoshyaApp {
             grid_rows: 4,
             grid_color: GridColor::Red,
             image_size: None,
+            web_url: String::new(),
+            fit_to_window: true,
         }
     }
 }
+
 impl MoshyaApp {
     fn open_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Image", &["png", "jpg", "jpeg", "webp", "bmp"])
             .pick_file()
         {
-            if let Ok((width, height)) = image::image_dimensions(&path) {
-                self.image_size = Some((width, height));
-            } else {
+            self.load_path(path);
+        }
+    }
+
+    fn load_path(&mut self, path: PathBuf) {
+        if let Ok((width, height)) = image::image_dimensions(&path) {
+            self.image_size = Some((width, height));
+        } else {
+            self.image_size = None;
+        }
+        let uri = format!("file://{}", path.to_string_lossy());
+        self.current_image = Some(AppImage::Uri(uri));
+    }
+
+    fn load_from_clipboard(&mut self, ctx: &egui::Context) {
+        let mut clipboard = match arboard::Clipboard::new() {
+            Ok(cb) => cb,
+            Err(_) => return,
+        };
+
+        // Try getting image first
+        if let Ok(image) = clipboard.get_image() {
+            let size = [image.width as usize, image.height as usize];
+            let pixels = egui::ColorImage::from_rgba_unmultiplied(size, &image.bytes);
+            let texture = ctx.load_texture("clipboard_image", pixels, Default::default());
+            self.image_size = Some((image.width as u32, image.height as u32));
+            self.current_image = Some(AppImage::Texture(texture));
+            return;
+        }
+
+        // Try getting text (URL)
+        if let Ok(text) = clipboard.get_text() {
+            let trimmed = text.trim();
+            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
                 self.image_size = None;
+                self.current_image = Some(AppImage::Uri(trimmed.to_string()));
             }
-            self.image_path = Some(path);
         }
     }
 }
+
 impl eframe::App for MoshyaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle Ctrl+V
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::V)) {
+            self.load_from_clipboard(ctx);
+        }
+
         let panel_frame = egui::Frame::default().fill(egui::Color32::from_rgba_premultiplied(
             0,
             0,
             0,
             (255.0 * self.opacity * 0.1) as u8,
         ));
+
         egui::CentralPanel::default()
             .frame(panel_frame)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("📂").clicked() {
+                    if ui.button("📂").on_hover_text("Open File").clicked() {
                         self.open_file();
                     }
+                    if ui
+                        .button("📋")
+                        .on_hover_text("Paste from Clipboard (Ctrl+V)")
+                        .clicked()
+                    {
+                        self.load_from_clipboard(ctx);
+                    }
+
+                    ui.separator();
+                    ui.add(egui::TextEdit::singleline(&mut self.web_url).hint_text("Image URL..."));
+                    if ui.button("🌐").on_hover_text("Load URL").clicked() {
+                        if !self.web_url.is_empty() {
+                            self.image_size = None;
+                            self.current_image = Some(AppImage::Uri(self.web_url.clone()));
+                        }
+                    }
+
+                    ui.separator();
+                    let fit_text = if self.fit_to_window {
+                        "Actual Size"
+                    } else {
+                        "Fit Window"
+                    };
+                    if ui
+                        .button(fit_text)
+                        .on_hover_text("Toggle Fit to Window / Actual Size")
+                        .clicked()
+                    {
+                        self.fit_to_window = !self.fit_to_window;
+                    }
+
+                    ui.separator();
                     let pin_text = if self.always_on_top { "Unpin" } else { "Pin" };
                     if ui.button(pin_text).clicked() {
                         self.always_on_top = !self.always_on_top;
@@ -104,10 +188,11 @@ impl eframe::App for MoshyaApp {
                         };
                         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
                     }
+
                     ui.separator();
                     ui.label("Op:");
                     ui.add(egui::Slider::new(&mut self.opacity, 0.1..=1.0).show_value(false));
-                    ui.separator();
+
                     ui.separator();
                     let grid_btn_text = if self.show_grid {
                         "Grid On"
@@ -155,17 +240,29 @@ impl eframe::App for MoshyaApp {
                         ui.label(format!("{}x{}", width, height));
                     }
                 });
+
                 ui.separator();
-                if let Some(path) = &self.image_path {
-                    let uri = format!("file://{}", path.to_string_lossy());
+
+                if let Some(app_img) = &self.current_image {
                     let available_size = ui.available_size();
-                    let mut image = egui::Image::new(&uri)
-                        .max_size(available_size)
-                        .rotate(self.rotation, egui::Vec2::splat(0.5));
                     let alpha = (255.0 * self.opacity) as u8;
-                    image = image.tint(egui::Color32::from_rgba_premultiplied(
-                        alpha, alpha, alpha, alpha,
-                    ));
+                    let tint = egui::Color32::from_rgba_premultiplied(alpha, alpha, alpha, alpha);
+
+                    let mut image = match app_img {
+                        AppImage::Uri(uri) => egui::Image::new(uri),
+                        AppImage::Texture(texture) => egui::Image::from_texture(texture),
+                    };
+
+                    if self.fit_to_window {
+                        image = image.fit_to_exact_size(available_size);
+                    } else {
+                        image = image.max_size(available_size);
+                    }
+
+                    image = image
+                        .rotate(self.rotation, egui::Vec2::splat(0.5))
+                        .tint(tint);
+
                     ui.vertical_centered(|ui| {
                         let response = ui.add(image);
                         let rect = response.rect;
@@ -193,15 +290,16 @@ impl eframe::App for MoshyaApp {
                     });
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label("Drop an image here");
+                        ui.label("Drop an image, paste, or enter a URL");
                     });
                 }
             });
+
         if !ctx.input(|i| i.raw.dropped_files.is_empty()) {
             let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
             if let Some(file) = dropped_files.first() {
                 if let Some(path) = &file.path {
-                    self.image_path = Some(path.clone());
+                    self.load_path(path.clone());
                 }
             }
         }
