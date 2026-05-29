@@ -34,6 +34,9 @@ struct MoshyaApp {
     grid_cols: u32,
     grid_rows: u32,
     grid_color: GridColor,
+    thick_line_width: f32,
+    thin_line_width: f32,
+    grid_subdivision: u32,
     image_size: Option<(u32, u32)>,
     web_url: String,
     fit_to_window: bool,
@@ -71,6 +74,9 @@ impl Default for MoshyaApp {
             grid_cols: 4,
             grid_rows: 4,
             grid_color: GridColor::Red,
+            thick_line_width: 2.0,
+            thin_line_width: 1.0,
+            grid_subdivision: 2,
             image_size: None,
             web_url: String::new(),
             fit_to_window: true,
@@ -204,9 +210,9 @@ impl eframe::App for MoshyaApp {
                     }
                     if self.show_grid {
                         ui.label("X:");
-                        ui.add(egui::DragValue::new(&mut self.grid_cols).range(1..=50));
+                        ui.add(egui::DragValue::new(&mut self.grid_cols).range(1..=100));
                         ui.label("Y:");
-                        ui.add(egui::DragValue::new(&mut self.grid_rows).range(1..=50));
+                        ui.add(egui::DragValue::new(&mut self.grid_rows).range(1..=100));
                         egui::ComboBox::from_id_salt("grid_color")
                             .selected_text(match self.grid_color {
                                 GridColor::Red => "Red",
@@ -234,6 +240,20 @@ impl eframe::App for MoshyaApp {
                                     "Black",
                                 );
                             });
+                        ui.label("Div:");
+                        ui.add(egui::DragValue::new(&mut self.grid_subdivision).range(1..=10));
+                        ui.label("Thick:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.thick_line_width)
+                                .range(0.1..=10.0)
+                                .speed(0.1),
+                        );
+                        ui.label("Thin:");
+                        ui.add(
+                            egui::DragValue::new(&mut self.thin_line_width)
+                                .range(0.1..=10.0)
+                                .speed(0.1),
+                        );
                     }
                     ui.separator();
                     if let Some((width, height)) = self.image_size {
@@ -268,22 +288,36 @@ impl eframe::App for MoshyaApp {
                         let rect = response.rect;
                         if self.show_grid {
                             let painter = ui.painter();
-                            let stroke = egui::Stroke::new(1.0, self.grid_color.to_color32());
-                            painter.rect_stroke(rect, 0.0, stroke);
+                            let grid_color = self.grid_color.to_color32();
+                            painter.rect_stroke(
+                                rect,
+                                0.0,
+                                egui::Stroke::new(self.thick_line_width, grid_color),
+                            );
                             for i in 1..self.grid_cols {
                                 let t = i as f32 / self.grid_cols as f32;
                                 let x = egui::lerp(rect.x_range(), t);
+                                let width = if i % self.grid_subdivision == 0 {
+                                    self.thick_line_width
+                                } else {
+                                    self.thin_line_width
+                                };
                                 painter.line_segment(
                                     [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                                    stroke,
+                                    egui::Stroke::new(width, grid_color),
                                 );
                             }
                             for i in 1..self.grid_rows {
                                 let t = i as f32 / self.grid_rows as f32;
                                 let y = egui::lerp(rect.y_range(), t);
+                                let width = if i % self.grid_subdivision == 0 {
+                                    self.thick_line_width
+                                } else {
+                                    self.thin_line_width
+                                };
                                 painter.line_segment(
                                     [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                                    stroke,
+                                    egui::Stroke::new(width, grid_color),
                                 );
                             }
                         }
