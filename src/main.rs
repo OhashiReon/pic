@@ -68,6 +68,7 @@ fn configure_pro_style() -> egui::Style {
     style
 }
 
+#[derive(Clone)]
 enum AppImage {
     Uri(String),
     Texture(egui::TextureHandle),
@@ -183,6 +184,11 @@ impl MoshyaApp {
 
 impl eframe::App for MoshyaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Force repaints while loading to ensure image_size is eventually captured
+        if self.current_image.is_some() && self.image_size.is_none() {
+            ctx.request_repaint();
+        }
+
         // Handle Ctrl+V
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::V)) {
             self.load_from_clipboard(ctx);
@@ -242,21 +248,6 @@ impl eframe::App for MoshyaApp {
                 // Right-aligned settings toggle
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.toggle_value(&mut self.show_settings_panel, "⚙ Settings");
-                });
-            });
-        });
-
-        // Bottom Panel: Status Bar
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.small(if let Some((w, h)) = self.image_size {
-                    format!("Resolution: {}x{}", w, h)
-                } else {
-                    "No image loaded".to_string()
-                });
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.small("Moshya Viewer v0.1.0");
                 });
             });
         });
@@ -366,6 +357,19 @@ impl eframe::App for MoshyaApp {
                 });
         }
 
+        // Bottom Panel: Status Bar
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if let Some((w, h)) = self.image_size {
+                    ui.label(format!("{}x{}", w, h));
+                } else if self.current_image.is_some() {
+                    ui.label("Loading...");
+                } else {
+                    ui.label("No image loaded");
+                }
+            });
+        });
+
         // Central Panel: Image Area
         let panel_frame = egui::Frame::none().fill(egui::Color32::from_rgba_premultiplied(
             0,
@@ -374,6 +378,7 @@ impl eframe::App for MoshyaApp {
             (255.0 * self.opacity * 0.1) as u8,
         ));
 
+        let mut new_image_size = None;
         egui::CentralPanel::default()
             .frame(panel_frame)
             .show(ctx, |ui| {
@@ -391,6 +396,15 @@ impl eframe::App for MoshyaApp {
                         image = image.fit_to_exact_size(available_size);
                     } else {
                         image = image.max_size(available_size);
+                    }
+
+                    // Capture image size when it becomes available
+                    if self.image_size.is_none() {
+                        if let Ok(poll) = image.load_for_size(ui.ctx(), available_size) {
+                            if let Some(size) = poll.size() {
+                                new_image_size = Some((size.x as u32, size.y as u32));
+                            }
+                        }
                     }
 
                     image = image
@@ -444,6 +458,10 @@ impl eframe::App for MoshyaApp {
                     });
                 }
             });
+
+        if let Some(size) = new_image_size {
+            self.image_size = Some(size);
+        }
 
         // Handle file drops
         if !ctx.input(|i| i.raw.dropped_files.is_empty()) {
