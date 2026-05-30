@@ -5,27 +5,75 @@ use eframe::egui;
 pub struct MoshyaApp {
     pub core: AppCore,
     pub file_dialog: Box<dyn FileDialogService>,
+    texture: Option<egui::TextureHandle>,
 }
 
 impl MoshyaApp {
     pub fn new(core: AppCore, file_dialog: Box<dyn FileDialogService>) -> Self {
-        Self { core, file_dialog }
+        Self {
+            core,
+            file_dialog,
+            texture: None,
+        }
+    }
+
+    fn sync_texture(&mut self, ctx: &egui::Context) {
+        if let ImageState::Loaded {
+            source: ImageSource::Raw(raw),
+            ..
+        } = &self.core.state
+        {
+            let needs_update = match &self.texture {
+                Some(t) => t.name() != "clipboard_image", // Simple check or check raw data
+                None => true,
+            };
+
+            if needs_update {
+                let size = [raw.width as usize, raw.height as usize];
+                let pixels = egui::ColorImage::from_rgba_unmultiplied(size, &raw.bytes);
+                self.texture = Some(ctx.load_texture("clipboard_image", pixels, Default::default()));
+            }
+        } else {
+            self.texture = None;
+        }
     }
 }
 
 impl eframe::App for MoshyaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Force repaints while loading to ensure image_size is eventually captured
+        self.sync_texture(ctx);
+
+        // --- FACT-BASED PASTE TRIGGER ---
+        let mut trigger_paste = false;
+        ctx.input(|i| {
+            for event in &i.events {
+                if matches!(event, egui::Event::Paste(_)) {
+                    trigger_paste = true;
+                }
+                if let egui::Event::Key {
+                    key: egui::Key::V,
+                    pressed: false,
+                    modifiers,
+                    ..
+                } = event
+                {
+                    if modifiers.ctrl || modifiers.command {
+                        trigger_paste = true;
+                    }
+                }
+            }
+        });
+
+        if trigger_paste {
+            self.core.handle_paste();
+        }
+
+        // Force repaints while loading
         if let ImageState::Loaded {
             dimensions: None, ..
         } = &self.core.state
         {
             ctx.request_repaint();
-        }
-
-        // Handle Ctrl+V
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::V)) {
-            self.core.handle_paste(ctx);
         }
 
         // Top Panel: Toolbar
@@ -40,7 +88,7 @@ impl eframe::App for MoshyaApp {
                     }
                 }
                 if ui.button("📋").on_hover_text("Paste (Ctrl+V)").clicked() {
-                    self.core.handle_paste(ctx);
+                    self.core.handle_paste();
                 }
 
                 ui.separator();
@@ -245,7 +293,13 @@ impl eframe::App for MoshyaApp {
 
                     let mut image = match source {
                         ImageSource::Uri(uri) => egui::Image::new(uri),
-                        ImageSource::Texture(texture) => egui::Image::from_texture(texture),
+                        ImageSource::Raw(_) => {
+                            if let Some(texture) = &self.texture {
+                                egui::Image::from_texture(texture)
+                            } else {
+                                return;
+                            }
+                        }
                     };
 
                     if self.core.fit_to_window {
@@ -272,7 +326,10 @@ impl eframe::App for MoshyaApp {
                         let rect = response.rect;
                         if self.core.show_grid {
                             let painter = ui.painter();
-                            let grid_color = self.core.grid_color.to_color32();
+                            let rgba = self.core.grid_color.to_rgba8();
+                            let grid_color = egui::Color32::from_rgba_premultiplied(
+                                rgba[0], rgba[1], rgba[2], rgba[3],
+                            );
                             painter.rect_stroke(
                                 rect,
                                 0.0,
@@ -308,8 +365,11 @@ impl eframe::App for MoshyaApp {
                     });
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label(
-                            egui::RichText::new("Drop an image, paste, or enter a URL").weak(),
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new("Drop an image, paste, or enter a URL").weak(),
+                            )
+                            .selectable(false),
                         );
                     });
                 }

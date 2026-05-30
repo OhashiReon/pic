@@ -1,9 +1,7 @@
 use crate::services::ClipboardService;
-use eframe::egui;
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
 pub enum ImviewError {
     #[error("Failed to access clipboard: {0}")]
     Clipboard(String),
@@ -11,13 +9,20 @@ pub enum ImviewError {
     Load(String),
 }
 
-#[derive(Clone)]
-pub enum ImageSource {
-    Uri(String),
-    Texture(egui::TextureHandle),
+#[derive(Clone, Debug, PartialEq)]
+pub struct RawImage {
+    pub bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
 }
 
-#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImageSource {
+    Uri(String),
+    Raw(RawImage),
+}
+
+#[derive(Debug)]
 pub enum ImageState {
     Idle,
     Loading {
@@ -30,7 +35,7 @@ pub enum ImageState {
     Failed(ImviewError),
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum GridColor {
     Red,
     Cyan,
@@ -40,13 +45,13 @@ pub enum GridColor {
 }
 
 impl GridColor {
-    pub fn to_color32(self) -> egui::Color32 {
+    pub fn to_rgba8(self) -> [u8; 4] {
         match self {
-            GridColor::Red => egui::Color32::from_rgba_premultiplied(255, 0, 0, 180),
-            GridColor::Cyan => egui::Color32::from_rgba_premultiplied(0, 255, 255, 180),
-            GridColor::Green => egui::Color32::from_rgba_premultiplied(0, 255, 0, 180),
-            GridColor::White => egui::Color32::from_rgba_premultiplied(255, 255, 255, 180),
-            GridColor::Black => egui::Color32::from_rgba_premultiplied(0, 0, 0, 180),
+            GridColor::Red => [255, 0, 0, 180],
+            GridColor::Cyan => [0, 255, 255, 180],
+            GridColor::Green => [0, 255, 0, 180],
+            GridColor::White => [255, 255, 255, 180],
+            GridColor::Black => [0, 0, 0, 180],
         }
     }
 }
@@ -100,27 +105,53 @@ impl AppCore {
         };
     }
 
-    pub fn handle_paste(&mut self, ctx: &egui::Context) {
+    pub fn handle_paste(&mut self) {
+        println!("[DEBUG] handle_paste invoked");
         // Try getting image first
-        if let Ok(image) = self.clipboard.get_image() {
-            let size = [image.width, image.height];
-            let pixels = egui::ColorImage::from_rgba_unmultiplied(size, &image.bytes);
-            let texture = ctx.load_texture("clipboard_image", pixels, Default::default());
-            self.state = ImageState::Loaded {
-                source: ImageSource::Texture(texture),
-                dimensions: Some((image.width as u32, image.height as u32)),
-            };
-            return;
+        match self.clipboard.get_image() {
+            Ok(image) => {
+                println!("[DEBUG] Clipboard returned image: {}x{}", image.width, image.height);
+                self.state = ImageState::Loaded {
+                    source: ImageSource::Raw(RawImage {
+                        width: image.width as u32,
+                        height: image.height as u32,
+                        bytes: image.bytes.to_vec(),
+                    }),
+                    dimensions: Some((image.width as u32, image.height as u32)),
+                };
+                return;
+            }
+            Err(e) => {
+                println!("[DEBUG] Clipboard get_image error: {}", e);
+                // Don't fail yet, try text
+            }
         }
 
-        // Try getting text (URL)
-        if let Ok(text) = self.clipboard.get_text() {
-            let trimmed = text.trim();
-            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-                self.state = ImageState::Loaded {
-                    source: ImageSource::Uri(trimmed.to_string()),
-                    dimensions: None,
-                };
+        // Try getting text (URL or Path)
+        match self.clipboard.get_text() {
+            Ok(text) => {
+                println!("[DEBUG] Clipboard returned text: length={}", text.len());
+                let trimmed = text.trim().trim_matches('"');
+                if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                    println!("[DEBUG] Pasted text recognized as URL: {}", trimmed);
+                    self.state = ImageState::Loaded {
+                        source: ImageSource::Uri(trimmed.to_string()),
+                        dimensions: None,
+                    };
+                } else {
+                    let path = PathBuf::from(trimmed);
+                    if path.exists() && path.is_file() {
+                        println!("[DEBUG] Pasted text recognized as existing file path: {:?}", path);
+                        self.handle_open_file(path);
+                    } else {
+                        println!("[DEBUG] Pasted text was not a URL or valid file path");
+                        self.state = ImageState::Failed(ImviewError::Clipboard("Clipboard contains text that is not a valid URL or image path.".to_string()));
+                    }
+                }
+            }
+            Err(e) => {
+                println!("[DEBUG] Clipboard get_text error: {}", e);
+                self.state = ImageState::Failed(ImviewError::Clipboard(format!("Failed to access clipboard: {}", e)));
             }
         }
     }
@@ -153,7 +184,7 @@ mod tests {
         if let ImageState::Loaded {
             source: ImageSource::Uri(uri),
             ..
-        } = core.state
+        } = &core.state
         {
             assert!(uri.contains("test.png"));
         } else {
@@ -174,7 +205,7 @@ mod tests {
         if let ImageState::Loaded {
             source: ImageSource::Uri(uri),
             ..
-        } = core.state
+        } = &core.state
         {
             assert_eq!(uri, "https://example.com/image.png");
         } else {
@@ -189,17 +220,45 @@ mod tests {
             text: Some("https://example.com/image.png".to_string()),
         });
         let mut core = AppCore::new(mock_cb);
-        let ctx = egui::Context::default();
-        core.handle_paste(&ctx);
+        core.handle_paste();
 
         if let ImageState::Loaded {
             source: ImageSource::Uri(uri),
             ..
-        } = core.state
+        } = &core.state
         {
             assert_eq!(uri, "https://example.com/image.png");
         } else {
             panic!("State should be Loaded(Uri)");
+        }
+    }
+
+    #[test]
+    fn test_handle_paste_image() {
+        let pixels = vec![255; 100 * 100 * 4];
+        let image = arboard::ImageData {
+            width: 100,
+            height: 100,
+            bytes: std::borrow::Cow::Owned(pixels),
+        };
+        let mock_cb = Box::new(MockClipboard {
+            image: Some(image),
+            text: None,
+        });
+        let mut core = AppCore::new(mock_cb);
+        core.handle_paste();
+
+        if let ImageState::Loaded {
+            source: ImageSource::Raw(raw),
+            dimensions: Some((w, h)),
+        } = &core.state
+        {
+            assert_eq!(raw.width, 100);
+            assert_eq!(raw.height, 100);
+            assert_eq!(*w, 100);
+            assert_eq!(*h, 100);
+        } else {
+            panic!("State should be Loaded(Raw)");
         }
     }
 }

@@ -25,7 +25,7 @@ fn main() -> eframe::Result<()> {
             cc.egui_ctx.set_style(configure_pro_style());
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            let clipboard = Box::new(NativeClipboard);
+            let clipboard = Box::new(NativeClipboard::new());
             let file_dialog = Box::new(NativeFileDialog);
             let core = AppCore::new(clipboard);
 
